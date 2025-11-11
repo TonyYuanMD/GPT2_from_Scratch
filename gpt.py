@@ -9,12 +9,14 @@ Students should implement the TODO sections in each class and function.
 
 import os
 import math
+from anyio import key
 import numpy as np
 import random
 import logging
 from typing import Optional, Callable, List, Tuple, Dict, Any
 
 # PyTorch imports
+from pydantic import conbytes
 import torch
 import torch.nn as nn
 import torch.functional as F
@@ -137,12 +139,12 @@ class MultiHeadAttention(nn.Module):
 
         self.d_out = d_in
         self.num_heads = num_heads
-        self.head_dim = d_out / num_heads
+        self.head_dim = d_out // num_heads
         self.W_query = nn.Linear(in_features=d_in, out_features=d_out, bias=qkv_bias)
         self.W_key = nn.Linear(in_features=d_in, out_features=d_out, bias=qkv_bias)
         self.W_value = nn.Linear(in_features=d_in, out_features=d_out, bias=qkv_bias)
         self.out_proj = nn.Linear(in_features=d_in, out_features=d_out)
-        self.dropout = dropout
+        self.dropout = nn.Dropout(p=dropout)
         self.scale = 1 / torch.sqrt(self.head_dim)
 
 
@@ -181,7 +183,10 @@ class MultiHeadAttention(nn.Module):
         # Use this mask during attention to set attention scores for future      #
         # tokens to -inf before softmax, enforcing causality.                    #
         ##########################################################################
-        self.mask = None
+        self.mask = torch.triu(torch.full((context_length, context_length), 
+                                          True, 
+                                          dtype=torch.bool), diagonal=1)
+        self.register_buffer("mask", self.mask)
 
 
     def forward(self, embeds: torch.Tensor) -> torch.Tensor:
@@ -215,15 +220,29 @@ class MultiHeadAttention(nn.Module):
         b, num_tokens, d_in = embeds.shape
 
         # Your code here
+        queries = self.W_query(embeds)
+        keys = self.W_key(embeds)
+        values = self.W_value(embeds)
 
+        queries = queries.view(b, self.num_heads, num_tokens, self.head_dim)
+        keys = keys.view(b, self.num_heads, num_tokens, self.head_dim)
+        values = values.view(b, self.num_heads, num_tokens, self.head_dim)
 
         # Apply RoPE to queries and keys like this:
         rope_cos, rope_sin = self.rope(queries)
         queries, keys = apply_rotary_pos_emb(queries, keys, rope_cos, rope_sin)
 
         # Rest of your code here
+        attn_score = torch.einsum("bhtd, bhid -> bhti", queries, keys)
+        attn_score /= torch.sqrt(self.head_dim)
+        neg_inf = torch.finfo(attn_score.dtype).min
+        attn_score = attn_score.masked_fill(self.mask[:num_tokens, :num_tokens], neg_inf)
+        attn_w = torch.softmax(attn_score, dim=3)
+        attn_w = self.dropout(attn_w)
+        output = torch.einsum("bhti, bhid -> bhtd", attn_w, values)
+        output = output.view(b, num_tokens, d_in)
 
-        pass
+        return self.out_proj(output)
 
 
 # =============================================================================
