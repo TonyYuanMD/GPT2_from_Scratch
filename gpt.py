@@ -73,7 +73,7 @@ class GPTEmbedding(nn.Module):
         # 2. Note: We don't need positional embeddings since we use RoPE!        #
         ###########################################################################
 
-        self.token_embeddings = None
+        self.token_embeddings = nn.Embedding(num_embeddings=vocab_size, embedding_dim=emb_dim)
 
     def forward(self, token_ids: torch.Tensor) -> torch.Tensor:
         """
@@ -91,7 +91,7 @@ class GPTEmbedding(nn.Module):
         # 2. Return the token embeddings (no positional embeddings needed!)       #
         ###########################################################################
 
-        pass
+        return self.token_embeddings(token_ids)
 
 
 # =============================================================================
@@ -135,15 +135,15 @@ class MultiHeadAttention(nn.Module):
         d_out = d_in
         assert (d_out % num_heads == 0), "d_out must be divisible by num_heads"
 
-        self.d_out = None
-        self.num_heads = None
-        self.head_dim = None
-        self.W_query = None
-        self.W_key = None
-        self.W_value = None
-        self.out_proj = None
-        self.dropout = None
-        self.scale = None
+        self.d_out = d_in
+        self.num_heads = num_heads
+        self.head_dim = d_out / num_heads
+        self.W_query = nn.Linear(in_features=d_in, out_features=d_out, bias=qkv_bias)
+        self.W_key = nn.Linear(in_features=d_in, out_features=d_out, bias=qkv_bias)
+        self.W_value = nn.Linear(in_features=d_in, out_features=d_out, bias=qkv_bias)
+        self.out_proj = nn.Linear(in_features=d_in, out_features=d_out)
+        self.dropout = dropout
+        self.scale = 1 / torch.sqrt(self.head_dim)
 
 
         # Initialize RoPE for positional encoding
