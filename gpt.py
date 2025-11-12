@@ -9,6 +9,7 @@ Students should implement the TODO sections in each class and function.
 
 import os
 import math
+import re
 from anyio import key
 import numpy as np
 import random
@@ -292,7 +293,10 @@ class FeedForward(nn.Module):
     """
     Position-wise feed-forward network (MLP) used inside a Transformer block.
 
-    Uses SwiGLU activation for better performance than traditional ReLU/GELU.
+    This implementation uses the SwiGLU activation function, which is
+    computed as: FFN(x) = (Swish(xW1) ⊙ xW2) W3
+
+    (Note: Swish(x) = x * sigmoid(x), which is torch.nn.functional.silu)
     """
     def __init__(self, emb_dim: int, expansion=8/3):
         """
@@ -300,23 +304,33 @@ class FeedForward(nn.Module):
 
         Args:
             emb_dim: Model/embedding width (D)
-            expansion: Width multiplier for the hidden layer
+            expansion: Width multiplier for the hidden layer.
+                       Per LLaMA paper, this is typically 2/3 * 4 = 8/3.
         """
         super().__init__()
 
         ################################################################
-        #                     TODO 1.5: YOUR CODE HERE                 #
-        # Implement a two-layer position-wise MLP:                     #
-        #   1) Choose hidden width d_ff = expansion * emb_dim.         #
-        #   2) Use SwiGLU activation (already defined above)           #
-        #   3) Build Linear(emb_dim -> d_ff) -> activation ->          #
-        #      Linear(d_ff -> emb_dim).                                #
-        # Hint: nn.Sequential can make things neater (but optional)    #
+        #                     TODO 1.5: YOUR CODE HERE                     #
+        # Implement the layers for the SwiGLU FFN:                     #
+        #   1) Calculate the hidden dimension 'd_ff'. This dimension   #
+        #      is (expansion * emb_dim).                               #
+        #      Reference: LLaMA paper, equation (2).                   #
+        #   2) For efficiency, we'll compute W1 and W2 in one step.    #
+        #      Define 'self.fc1' as a Linear layer that maps:          #
+        #      emb_dim -> 2 * d_ff                                     #
+        #   3) Define 'self.fc2' as the output layer that maps:        #
+        #      d_ff -> emb_dim                                         #
         ################################################################
 
-        # More efficient implementation using chunking
-        self.fc1 = None
-        self.fc2 = None
+        # Calculate the hidden dimension
+        # NOTE: The formula for d_ff in SwiGLU is (expansion * emb_dim).
+        # We multiply by 2 in the fc1 layer because we are creating
+        # *two* matrices (W1 and W2) of size [emb_dim, d_ff].
+        d_ff = int(emb_dim * expansion)
+
+        self.fc1 = nn.Linear(emb_dim, 2 * d_ff)
+        self.fc2 = nn.Linear(d_ff, emb_dim)
+
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -329,10 +343,19 @@ class FeedForward(nn.Module):
         """
         ################################################################
         #                     TODO 1.6: YOUR CODE HERE                     #
-        # Pass x through the MLP defined in __init__ and return it.    #
-        # Use the efficient chunking approach for SwiGLU                #
+        # Implement the forward pass for SwiGLU:                       #
+        #   1) Pass the input 'x' through 'self.fc1'.                  #
+        #   2) 'Chunk' the result from fc1 into two separate tensors   #
+        #      (x1 and x2) along the last dimension.                   #
+        #   3) Apply the SwiGLU logic: output = (silu(x1) * x2)        #
+        #      (Hint: use F.silu for the Swish activation)             #
+        #   4) Pass the result through the output layer 'self.fc2'.    #
         ################################################################
-        pass
+
+        x = self.fc1(x)
+        x1, x2 = x.chunk(chunks=2, dim=-1)
+        output = F.silu(x1) * x2
+        return self.fc2(output)
 
 # =============================================================================
 # Transformer Block
@@ -372,11 +395,14 @@ class TransformerBlock(nn.Module):
         #      - norm2 applied before MLP                              #
         # 4) Store dropout probability; use it after attn and MLP.     #
         ################################################################
-        self.self_attn = None
-        self.ffn = None
-        self.norm1 = None
-        self.norm2 = None
-        self.dropout_p = None
+        self.self_attn = MultiHeadAttention(d_in=cfg["emb_dim"], 
+                                            context_length=cfg["context_length"], 
+                                            dropout=cfg["drop_rate"],
+                                            num_heads=cfg["n_heads"])
+        self.ffn = FeedForward(emb_dim=cfg["emb_dim"])
+        self.norm1 = RMSNorm(cfg["emb_dim"])
+        self.norm2 = RMSNorm(cfg["emb_dim"])
+        self.dropout_p = cfg["drop_rate"]
 
     def maybe_dropout(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -394,7 +420,11 @@ class TransformerBlock(nn.Module):
         #   training=self.training)                                    #
         # - Return x unchanged if dropout_p == 0.                      #
         ################################################################
-        pass
+        if self.dropout_p > 0:
+            return nn.functional.dropout(x, p=self.dropout_p, training=self.training)
+        elif self.dropout_p == 0:
+            return x
+        
 
     def forward(self, x: torch.Tensor):
         """
@@ -419,7 +449,10 @@ class TransformerBlock(nn.Module):
         #    - Add residual connection with dropout                    #
         ################################################################
 
-        pass
+        x = self.maybe_dropout(self.self_attn(self.norm1(x))) + x
+        x = self.maybe_dropout(self.ffn(self.norm2(x))) + x
+
+        return x
 
 
 # =============================================================================
@@ -465,11 +498,16 @@ class GPTModel(nn.Module):
         # and the output head, so there's only one set of weights (fewer parameters).
 
 
-        self.embedding =  None
-        self.dropout = None
-        self.trf_blocks = None
-        self.final_norm = None
-        self.out_head = None
+        self.embedding =  GPTEmbedding(cfg["vocab_size"],
+                                       emb_dim=cfg["emb_dim"],
+                                       context_length=self.context_length)
+        self.dropout = nn.Dropout(p=cfg["drop_rate"])
+        self.trf_blocks = nn.Sequential(MultiHeadAttention(d_in=cfg["emb_dim"],
+                                                           context_length=self.context_length,
+                                                           dropout=cfg["drop_rate"],
+                                                           num_heads=cfg["n_heads"]) * cfg["n_layers"])
+        self.final_norm = RMSNorm(cfg["emb_dim"])
+        self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"])
 
 
     def forward(self, in_idx: torch.Tensor) -> torch.Tensor:
