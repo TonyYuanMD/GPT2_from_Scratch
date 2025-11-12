@@ -10,7 +10,7 @@ Students should implement the TODO sections in each class and function.
 import os
 import math
 import re
-from anyio import key
+# from anyio import key
 import numpy as np
 import random
 import logging
@@ -502,12 +502,10 @@ class GPTModel(nn.Module):
                                        emb_dim=cfg["emb_dim"],
                                        context_length=self.context_length)
         self.dropout = nn.Dropout(p=cfg["drop_rate"])
-        self.trf_blocks = nn.Sequential(MultiHeadAttention(d_in=cfg["emb_dim"],
-                                                           context_length=self.context_length,
-                                                           dropout=cfg["drop_rate"],
-                                                           num_heads=cfg["n_heads"]) * cfg["n_layers"])
+        self.trf_blocks = nn.Sequential(*[TransformerBlock(cfg) for _ in range(cfg["n_layers"])])
         self.final_norm = RMSNorm(cfg["emb_dim"])
-        self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"])
+        self.out_head = nn.Linear(cfg["emb_dim"], cfg["vocab_size"], bias=False)
+        self.out_head.weight = self.embedding.token_embeddings.weight
 
 
     def forward(self, in_idx: torch.Tensor) -> torch.Tensor:
@@ -534,7 +532,12 @@ class GPTModel(nn.Module):
         # 6) Return logits                                             #
         ################################################################
 
-        pass
+        x = self.embedding(in_idx)
+        x = self.dropout(x)
+        x = self.trf_blocks(x)
+        x = self.final_norm(x)
+        x = self.out_head(x)
+        return x
 
 
 # =============================================================================
@@ -636,14 +639,22 @@ class GPTDataset(Dataset):
         #        token t using tokens < t.                             #
         ################################################################
 
-        self.tokenizer = None
-        self.max_length = None
-        self.stride = None
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+        self.stride = stride
         self.input_ids = None
         self.target_ids = None
 
         # Your code here
-        pass
+        full_text = "\n\n".join(docs)
+        tokenized_output = tokenizer(full_text, return_tensors="pt")
+        token_ids = tokenized_output['input_ids'][0]
+        
+        L = len(token_ids)
+        max_start_idx = L - max_length
+        start_indices = torch.arange(0, max_start_idx, stride)
+        self.input_ids = token_ids[start_indices[:, None] + torch.arange(max_length)].to(torch.long)
+        self.target_ids = token_ids[start_indices[:, None] + torch.arange(1, max_length + 1)].to(torch.long)
 
     def __len__(self):
         return len(self.input_ids)
@@ -661,7 +672,7 @@ class GPTDataset(Dataset):
         #                     TODO 1.13: YOUR CODE HERE                     #
         # Return the input and target tensors for the given index      #
         ################################################################
-        pass
+        return self.input_ids[idx], self.target_ids[idx]
 
 
 class GPTArrowDataset(Dataset):
@@ -739,7 +750,21 @@ def create_dataloader(txt=None, arrow_dataset_path=None, batch_size=16, max_leng
     #    - Create DataLoader with the regular dataset              #
     # 4) Return the appropriate DataLoader                          #
     ################################################################
-    pass
+    if arrow_dataset_path:
+         return DataLoader(GPTArrowDataset(arrow_dataset_path=arrow_dataset_path),
+                                           batch_size=batch_size,
+                                           shuffle=shuffle,
+                                           drop_last=drop_last,
+                                           num_workers=num_workers)
+    else:
+        return DataLoader(GPTDataset(txt,
+                                     tokenizer=setup_tokenizer(),
+                                     max_length=max_length,
+                                     stride=stride),
+                          batch_size=batch_size,
+                          shuffle=shuffle,
+                          drop_last=drop_last,
+                          num_workers=num_workers)
 
 
 # =============================================================================
@@ -772,4 +797,8 @@ def setup_tokenizer():
 
     # Your code here
 
-    pass
+    tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path="gpt2",
+                                              pad_token="<|pad|>", )
+    tokenizer.add_special_tokens(special_tokens_dict)
+
+    return tokenizer
