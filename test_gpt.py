@@ -960,7 +960,7 @@ class TestFeedForwardTODOs(unittest.TestCase):
         self.assertIsInstance(ff.fc2, nn.Linear)
 
         # Verify dimensions (using efficient chunking approach)
-        expected_hidden_dim = int(round((8/3) * self.emb_dim / 2))
+        expected_hidden_dim = int(round((8/3) * self.emb_dim))
         self.assertEqual(ff.fc1.out_features, 2 * expected_hidden_dim)
         self.assertEqual(ff.fc2.in_features, expected_hidden_dim)
         self.assertEqual(ff.fc2.out_features, self.emb_dim)
@@ -1503,7 +1503,7 @@ class TestMathematicalCorrectness(unittest.TestCase):
         ff = FeedForward(emb_dim)
 
         # Test expansion factor calculation
-        expected_hidden_dim = int(round((8/3) * emb_dim / 2))
+        expected_hidden_dim = int(round((8/3) * emb_dim))
         self.assertEqual(ff.fc1.out_features, 2 * expected_hidden_dim)
         self.assertEqual(ff.fc2.in_features, expected_hidden_dim)
 
@@ -1835,7 +1835,7 @@ class TestMathematicalProperties(unittest.TestCase):
         ff = FeedForward(emb_dim)
 
         # Verify expansion factor is applied correctly
-        expected_hidden_dim = int(round((8/3) * emb_dim / 2))
+        expected_hidden_dim = int(round((8/3) * emb_dim))
         self.assertEqual(ff.fc1.out_features, 2 * expected_hidden_dim)
         self.assertEqual(ff.fc2.in_features, expected_hidden_dim)
 

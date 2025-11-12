@@ -146,7 +146,7 @@ class MultiHeadAttention(nn.Module):
         self.W_value = nn.Linear(in_features=d_in, out_features=d_out, bias=qkv_bias)
         self.out_proj = nn.Linear(in_features=d_in, out_features=d_out)
         self.dropout = nn.Dropout(p=dropout)
-        self.scale = 1 / torch.sqrt(self.head_dim)
+        self.scale = 1 / math.sqrt(self.head_dim)
 
 
         # Initialize RoPE for positional encoding
@@ -184,10 +184,10 @@ class MultiHeadAttention(nn.Module):
         # Use this mask during attention to set attention scores for future      #
         # tokens to -inf before softmax, enforcing causality.                    #
         ##########################################################################
-        self.mask = torch.triu(torch.full((context_length, context_length), 
+        causal_mask = torch.triu(torch.full((context_length, context_length), 
                                           True, 
                                           dtype=torch.bool), diagonal=1)
-        self.register_buffer("mask", self.mask)
+        self.register_buffer("mask", causal_mask)
 
 
     def forward(self, embeds: torch.Tensor) -> torch.Tensor:
@@ -235,7 +235,7 @@ class MultiHeadAttention(nn.Module):
 
         # Rest of your code here
         attn_score = torch.einsum("bhtd, bhid -> bhti", queries, keys)
-        attn_score /= torch.sqrt(self.head_dim)
+        attn_score /= math.sqrt(self.head_dim)
         neg_inf = torch.finfo(attn_score.dtype).min
         attn_score = attn_score.masked_fill(self.mask[:num_tokens, :num_tokens], neg_inf)
         attn_w = torch.softmax(attn_score, dim=3)
@@ -326,7 +326,7 @@ class FeedForward(nn.Module):
         # NOTE: The formula for d_ff in SwiGLU is (expansion * emb_dim).
         # We multiply by 2 in the fc1 layer because we are creating
         # *two* matrices (W1 and W2) of size [emb_dim, d_ff].
-        d_ff = int(emb_dim * expansion)
+        d_ff = int(round(emb_dim * expansion))
 
         self.fc1 = nn.Linear(emb_dim, 2 * d_ff)
         self.fc2 = nn.Linear(d_ff, emb_dim)
@@ -354,7 +354,7 @@ class FeedForward(nn.Module):
 
         x = self.fc1(x)
         x1, x2 = x.chunk(chunks=2, dim=-1)
-        output = F.silu(x1) * x2
+        output = nn.functional.silu(x1) * x2
         return self.fc2(output)
 
 # =============================================================================
@@ -647,11 +647,11 @@ class GPTDataset(Dataset):
 
         # Your code here
         full_text = "\n\n".join(docs)
-        tokenized_output = tokenizer(full_text, return_tensors="pt")
-        token_ids = tokenized_output['input_ids'][0]
+        list_of_ids = tokenizer.encode(full_text)
+        token_ids = torch.tensor(list_of_ids, dtype=torch.long)
         
         L = len(token_ids)
-        max_start_idx = L - max_length
+        max_start_idx = max(0, L - max_length)
         start_indices = torch.arange(0, max_start_idx, stride)
         self.input_ids = token_ids[start_indices[:, None] + torch.arange(max_length)].to(torch.long)
         self.target_ids = token_ids[start_indices[:, None] + torch.arange(1, max_length + 1)].to(torch.long)
@@ -756,7 +756,7 @@ def create_dataloader(txt=None, arrow_dataset_path=None, batch_size=16, max_leng
                                            shuffle=shuffle,
                                            drop_last=drop_last,
                                            num_workers=num_workers)
-    else:
+    elif txt is not None:
         return DataLoader(GPTDataset(txt,
                                      tokenizer=setup_tokenizer(),
                                      max_length=max_length,
@@ -765,7 +765,8 @@ def create_dataloader(txt=None, arrow_dataset_path=None, batch_size=16, max_leng
                           shuffle=shuffle,
                           drop_last=drop_last,
                           num_workers=num_workers)
-
+    else:
+        raise ValueError
 
 # =============================================================================
 # Utility Functions
