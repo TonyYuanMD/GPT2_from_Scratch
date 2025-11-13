@@ -7,6 +7,7 @@ Supervised Fine-Tuning (SFT) of GPT models for conversational AI.
 Students should implement the TODO sections in each class and function.
 """
 
+import enum
 import os
 import json
 import math
@@ -134,7 +135,31 @@ class SFTDataset(Dataset):
         #                                                                         #
         ###########################################################################
 
-        pass
+        ids = []
+        labels = []
+
+        for d in conversation:
+            role = d["role"]
+            content = d["content"]
+            if role == "assistant":
+                id_token = [self.SID["asst"]] + self.tokenizer.encode(content, add_special_tokens=False) + [self.SID["end"]]
+                label = id_token[1:] + [-100]
+            elif role == "user":
+                id_token = [self.SID["user"]] + self.tokenizer.encode(content, add_special_tokens=False) + [self.SID["end"]]
+                label = [-100] * len(id_token)
+            elif role == "sys":
+                id_token = [self.SID["sys"]] + self.tokenizer.encode(content,add_special_tokens=False) + [self.SID["end"]]
+                label = [-100] * len(id_token)
+
+            ids.extend(id_token)
+            labels.extend(label)
+            
+            if len(ids) >= self.max_length:
+                break
+        ids = torch.tensor(ids, dtype=torch.long)
+        labels = torch.tensor(labels, dtype=torch.long)
+
+        return torch.tensor(ids), torch.tensor(labels)
 
     def __getitem__(self, idx):
         return self._build_ids_labels(self.conversations[idx])
@@ -170,7 +195,22 @@ def sft_data_collator(batch):
     # This ensures all sequences in a batch have the same length.            #
     ###########################################################################
 
-    pass
+    input_ids_list = [t[0] for t in batch]
+    labels_list = [t[1] for t in batch]
+    
+    input_ids = nn.utils.rnn.pad_sequence(
+        input_ids_list, 
+        batch_first=True, 
+        padding_value=0 # Assuming PAD_TOKEN_ID is 0
+    )
+
+    labels = nn.utils.rnn.pad_sequence(
+        labels_list, 
+        batch_first=True, 
+        padding_value=-100 
+    )
+
+    return {'input_ids': input_ids, 'labels': labels}
 
 
 def hf_collate(examples):
@@ -240,7 +280,42 @@ def generate_chat_response(model, tokenizer, user_message, max_new_tokens=100, t
     # This enables conversational AI by generating responses in chat format.     #
     ##############################################################################
 
-    pass
+    input_concat = f"<|user|>{user_message}<|end|><|assistant|>"
+    input_token = tokenizer.encode(input_concat, return_tensor="pt").to(model.device)
+    
+    end_id = tokenizer.convert_tokens_to_ids("<|end|>")
+    model.eval()
+    
+    for _ in range(max_new_tokens):
+        cur_len = input_token.shape[1]
+        
+        if cur_len > model.context_length:
+            input_token = input_token[:, -model.context_length:]
+
+        with torch.no_grad():
+            logits = model(input_token)
+        
+        logits = logits[:, -1, :] / temperature
+        
+        probs = torch.softmax(logits, dim=2)
+        next_token = torch.multinomial(probs, 1)
+        
+        if next_token.item() == end_id:
+            break
+        
+        input_token = torch.cat((input_token, next_token), dim=1)
+    
+    output = tokenizer.decode(input_token.squeeze(0).tolist())
+    start_idx = output.rfind("<|assistant|>")
+    
+    if start_idx == -1:
+        return "Generation Error: Assistant marker not found."
+    
+    end_idx = output.rfind("<|end|>")
+    if end_idx != -1:
+        return output[start_idx + 15:end_idx].strip()
+    else:
+        return output[start_idx + 15:].strip()
 
 def generate_multi_turn_response(model, tokenizer, conversation_history, max_new_tokens=100, temperature=0.7):
     """
@@ -355,8 +430,22 @@ def evaluate_validation_loss(model, val_loader, loss_fn, device):
     # This is crucial for monitoring SFT training progress!                   #
     ###########################################################################
 
-    pass
-
+    if len(val_loader) == 0:
+        raise ValueError("Empty DataLoader for validation!")
+    model.eval()
+    total_loss = 0
+    with torch.no_grad():
+        for batch_idx, batch in enumerate(val_loader):
+            input_ids = batch["input_ids"].to(device)
+            labels = batch["labels"].to(device)
+            
+            logits = model(input_ids)
+            logits = logits.view(logits.shape[0] * logits.shape[1], logits.shape[-1])
+            labels = labels.view(-1)
+            total_loss += loss_fn(logits, labels)
+    
+    model.train()
+    return total_loss/len(val_loader)
 
 def create_sft_dataloader(data_file: str, tokenizer, batch_size: int = 16,
                          max_length: int = 1024, shuffle: bool = True,
@@ -405,4 +494,20 @@ def create_sft_dataloader(data_file: str, tokenizer, batch_size: int = 16,
     # This provides flexibility to use either regular or packed datasets.     #
     ###########################################################################
 
-    pass
+    if use_packed:
+        dataset = load_from_disk(data_file)
+        collate_fn = hf_collate
+
+    else:
+        dataset = SFTDataset(data_file=data_file,
+                   tokenizer=tokenizer,
+                   max_length=max_length)
+        collate_fn = sft_data_collator
+
+    
+    return DataLoader(dataset=dataset,
+                      batch_size=batch_size,
+                      shuffle=shuffle,
+                      drop_last=drop_last,
+                      num_workers=num_workers,
+                      collate_fn=collate_fn)
