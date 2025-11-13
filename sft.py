@@ -45,7 +45,6 @@ from gpt import (
     MultiHeadAttention,
     SwiGLU,
     FeedForward,
-    LayerNorm,
     TransformerBlock,
     GPTModel,
     generate_new_tokens,
@@ -147,7 +146,7 @@ class SFTDataset(Dataset):
             elif role == "user":
                 id_token = [self.SID["user"]] + self.tokenizer.encode(content, add_special_tokens=False) + [self.SID["end"]]
                 label = [-100] * len(id_token)
-            elif role == "sys":
+            elif role == "system":
                 id_token = [self.SID["sys"]] + self.tokenizer.encode(content,add_special_tokens=False) + [self.SID["end"]]
                 label = [-100] * len(id_token)
 
@@ -159,7 +158,7 @@ class SFTDataset(Dataset):
         ids = torch.tensor(ids, dtype=torch.long)
         labels = torch.tensor(labels, dtype=torch.long)
 
-        return torch.tensor(ids), torch.tensor(labels)
+        return ids, labels
 
     def __getitem__(self, idx):
         return self._build_ids_labels(self.conversations[idx])
@@ -250,7 +249,7 @@ def hf_collate(examples):
 # Text Generation Functions
 # =============================================================================
 
-def generate_chat_response(model, tokenizer, user_message, max_new_tokens=100, temperature=0.7):
+def generate_chat_response(model, tokenizer, user_message, max_new_tokens=100, temperature=0.7, context=""):
     """
     Generate a conversational response using the fine-tuned model.
 
@@ -279,9 +278,10 @@ def generate_chat_response(model, tokenizer, user_message, max_new_tokens=100, t
     #                                                                            #
     # This enables conversational AI by generating responses in chat format.     #
     ##############################################################################
-
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     input_concat = f"<|user|>{user_message}<|end|><|assistant|>"
-    input_token = tokenizer.encode(input_concat, return_tensor="pt").to(model.device)
+    input_token = torch.tensor(tokenizer.encode(input_concat)).unsqueeze(0) 
+    input_token = input_token.to(device)
     
     end_id = tokenizer.convert_tokens_to_ids("<|end|>")
     model.eval()
@@ -297,9 +297,8 @@ def generate_chat_response(model, tokenizer, user_message, max_new_tokens=100, t
         
         logits = logits[:, -1, :] / temperature
         
-        probs = torch.softmax(logits, dim=2)
+        probs = torch.softmax(logits, dim=1)
         next_token = torch.multinomial(probs, 1)
-        
         if next_token.item() == end_id:
             break
         
@@ -431,7 +430,7 @@ def evaluate_validation_loss(model, val_loader, loss_fn, device):
     ###########################################################################
 
     if len(val_loader) == 0:
-        raise ValueError("Empty DataLoader for validation!")
+        return 0
     model.eval()
     total_loss = 0
     with torch.no_grad():
