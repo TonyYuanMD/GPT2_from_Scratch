@@ -279,6 +279,29 @@ def create_dataloaders(docs, tokenizer, config, args):
     print(f"📊 Validation documents: {len(valid_loader)}")
     return train_loader, valid_loader
 
+# Add this function outside of train_model (where main is located)
+
+def save_model(model, optimizer, args, global_step, config, is_epoch_end=False):
+    """Saves the model checkpoint and configuration."""
+    
+    # 1. Define filename
+    if is_epoch_end:
+        filename = f"model_epoch_final.pth"
+    else:
+        filename = f"model_step_{global_step}.pth"
+
+    save_path = os.path.join(args.output_dir, args.wandb_run_name, filename)
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+    
+    # 2. Save the state dictionary
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'config': config,
+        'global_step': global_step,
+    }, save_path)
+    print(f"✅ Model saved to {save_path}")
+
 def evaluate_validation_loss(model, val_loader, loss_fn, device, max_docs=None):
     """Evaluate the model's loss on the validation dataset.
 
@@ -467,7 +490,12 @@ def train_model(model, train_loader, val_loader, config, args):
     # 7. Track optimization steps: opt_step += 1, global_step += 1
     #
     ###########################################################################
-
+    # Initialize gradient scaler for mixed precision
+    scaler = GradScaler()
+    
+    # We will use this to track loss for logging
+    current_step_loss = 0.0 # Initialize outside the loop
+    
     for epoch in trange(args.max_epochs, desc="Epoch"):
 
         for step, (input_ids, labels) in enumerate(tqdm(train_loader, position=1, leave=True, desc="Step")):
@@ -484,11 +512,72 @@ def train_model(model, train_loader, val_loader, config, args):
             # for more information on mixed precision training if you're curious!
             # We strongly recommend using mixed precision training for faster training and reduced memory usage.
 
-            # Your code here
+            # Unpack dictionary (assuming the collator returns a dict)
+            input_ids = input_ids.to(device)
+            labels = labels.to(device)
 
-        # Save model at end of epoch
+            # 1. Forward Pass and Loss with Mixed Precision
+            # The 'autocast' context ensures the forward pass uses the lower precision (amp_dtype).
+            with autocast(device_type=device.type, dtype=amp_dtype):
+                logits = model(input_ids)
+                logits_flat = logits.view(-1, logits.shape[-1])
+                labels_flat = labels.view(-1)
+                
+                # Scale loss by 'accum' factor for accumulation
+                loss_val = loss_fn(logits_flat, labels_flat) / accum
+            
+            # 2. Backward Pass (Scaled by GradScaler)
+            # Use scaler.scale() for backward pass
+            scaler.scale(loss_val).backward()
+            
+            # Track loss for logging (unscaled by 'accum')
+            current_step_loss += loss_val.item() * accum 
+            
+            # 3. Conditional Optimization Step (Macro-Batch Update)
+            if (step + 1) % accum == 0:
+                
+                # a. Unscale, Clip, and Step
+                scaler.unscale_(optimizer) 
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                
+                scaler.step(optimizer) # Optimizer update (handles NaNs)
+                scaler.update()        # Scaler update
+                
+                # b. Clear Gradients and Update LR
+                scheduler.step()
+                optimizer.zero_grad()
+                
+                # c. Track Steps
+                opt_step += 1
+                global_step += 1
+                
+                # 4. Logging to WandB
+                if opt_step % args.eval_every == 0:
+                    wandb.log({
+                        "train/loss": current_step_loss / args.eval_every,
+                        "train/lr": optimizer.param_groups[0]['lr'],
+                        "train/global_step": global_step,
+                    })
+                    
+                    # 5. Step Evaluation
+                    if val_loader is not None:
+                        val_loss = evaluate_validation_loss(
+                            model, val_loader, loss_fn, device, args.eval_max_docs_step
+                        )
+                        wandb.log({"val/loss": val_loss, "val/global_step": global_step})
 
-        # Final evaluation for epoch (use all validation data)
+                    current_step_loss = 0.0 # Reset loss after logging
+
+                # 6. Checkpointing
+                if opt_step % args.save_every == 0:
+                    save_model(model, optimizer, args, global_step, config)
+
+        # 7. End of Epoch Final Evaluation & Saving
+        if val_loader is not None:
+            full_val_loss = evaluate_validation_loss(model, val_loader, loss_fn, device)
+            wandb.log({"epoch/val_loss": full_val_loss, "epoch/global_step": global_step})
+            
+        save_model(model, optimizer, args, global_step, config, is_epoch_end=True)
 
 
     print("Training completed!")
@@ -552,7 +641,12 @@ def main():
     ###########################################################################
 
     # your code here
-    pass
+    model = gpt.GPTModel(config).to(args.device)
+    torch.compile(model, mode="default")
+    total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"📊 Total Trainable Parameters: {total_params:,}")
+    
+    train_model(model, train_loader=train_loader, val_loader=val_loader, config=config, args=args)
 
 
 if __name__ == "__main__":
