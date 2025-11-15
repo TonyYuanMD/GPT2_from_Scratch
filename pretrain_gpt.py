@@ -233,10 +233,51 @@ def create_dataloaders(docs, tokenizer, config, args):
     ###########################################################################
 
     # Your Code here
+    if args.data_format == "ärrow":
+        train_loader = gpt.create_dataloader(arrow_dataset_path=args.data_path, 
+                                             batch_size=args.batch_size,
+                                            #  max_length=config['context_length'],
+                                            #  stride=config['context_length'] // 2,
+                                             shuffle=True,
+                                             drop_last=True,
+                                             num_workers=args.num_workers)
+
+        val_path = args.eval_data_path if args.eval_data_path else args.data_path
+
+        valid_loader = gpt.create_dataloader(arrow_dataset_path=val_path, 
+                                             batch_size=args.eval_batch_size,
+                                            #  max_length=config['context_length'],
+                                            #  stride=config['context_length'] // 2,
+                                             shuffle=True,
+                                             drop_last=True,
+                                             num_workers=args.num_workers)
+
+    else:
+        total_docs = len(docs)
+        train_size = int(total_docs * 0.95)
+
+        train_docs = docs[:train_size]
+        val_docs = docs[train_size:]
+        
+        train_loader = gpt.create_dataloader(txt=train_docs, 
+                                             batch_size=args.batch_size,
+                                             max_length=config['context_length'],
+                                             stride=config['context_length'] // 2,
+                                             shuffle=True,
+                                             drop_last=True,
+                                             num_workers=args.num_workers)
+        valid_loader = gpt.create_dataloader(txt=val_docs, 
+                                             batch_size=args.eval_batch_size,
+                                             max_length=config['context_length'],
+                                             stride=config['context_length'] // 2,
+                                             shuffle=True,
+                                             drop_last=True,
+                                             num_workers=args.num_workers)
 
     print("✅ Dataloaders created")
-    pass
-
+    print(f"📊 Training documents: {len(train_loader)}")
+    print(f"📊 Validation documents: {len(valid_loader)}")
+    return train_loader, valid_loader
 
 def evaluate_validation_loss(model, val_loader, loss_fn, device, max_docs=None):
     """Evaluate the model's loss on the validation dataset.
@@ -269,7 +310,31 @@ def evaluate_validation_loss(model, val_loader, loss_fn, device, max_docs=None):
     # This is crucial for monitoring overfitting during training!             #
     ###########################################################################
 
-    pass
+    model.eval()
+
+    total_loss = 0
+    num_batch = 0
+
+    with torch.no_grad():
+        for batch in val_loader:
+            
+            input_ids = batch['input_ids'].to(device)
+            labels = batch['labels'].to(device)
+
+            logits = model(input_ids)
+            logits_flat = logits.view(-1, logits.shape[-1])
+            labels_flat = labels.view(-1)
+
+            loss_val = loss_fn(logits_flat, labels_flat)
+            total_loss += loss_val.item()
+
+            if max_docs is not None and num_batch >= max_docs:
+                break
+
+    loss_avg = total_loss / num_batch
+    model.train()
+
+    return loss_avg
 
 def train_model(model, train_loader, val_loader, config, args):
     """Train the GPT model."""
