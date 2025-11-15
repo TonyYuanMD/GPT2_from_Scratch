@@ -73,7 +73,7 @@ def parse_args():
 
     # Data arguments
     parser.add_argument('--data_path', type=str,
-                       default='/shared/0/projects/teaching/eecs595/data/fineweb-edu-sample-1B.jsonl.gz',
+                       default='./Data/fineweb-edu-sample-1M.jsonl.gz',
                        help='Path to the training data (JSONL.gz file or Arrow dataset directory)')
     parser.add_argument('--data_format', type=str, choices=['jsonl', 'arrow'], default='jsonl',
                        help='Format of training data: jsonl (for .jsonl/.gz files) or arrow (for arrow datasets)')
@@ -133,7 +133,7 @@ def parse_args():
                        default=f"gpt-pretraining-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}",
                        help='Wandb run name')
     # System arguments
-    parser.add_argument('--device', type=str, default='auto',
+    parser.add_argument('--device', type=str, default='cpu',
                        help='Device to use (auto, cpu, cuda, mps)')
     parser.add_argument('--num_workers', type=int, default=8,
                        help='Number of data loading workers')
@@ -518,7 +518,7 @@ def train_model(model, train_loader, val_loader, config, args):
 
             # 1. Forward Pass and Loss with Mixed Precision
             # The 'autocast' context ensures the forward pass uses the lower precision (amp_dtype).
-            with autocast(device_type=device.type, dtype=amp_dtype):
+            with autocast(device_type=device, dtype=amp_dtype):
                 logits = model(input_ids)
                 logits_flat = logits.view(-1, logits.shape[-1])
                 labels_flat = labels.view(-1)
@@ -641,8 +641,9 @@ def main():
     ###########################################################################
 
     # your code here
-    model = gpt.GPTModel(config).to(args.device)
-    torch.compile(model, mode="default")
+    device = get_device(args.device) # Returns string 'cpu'
+    model = gpt.GPTModel(config).to(device)
+    # torch.compile(model, mode="default")
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"📊 Total Trainable Parameters: {total_params:,}")
     

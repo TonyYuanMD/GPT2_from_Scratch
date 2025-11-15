@@ -566,8 +566,10 @@ def generate_new_tokens(model, idx, max_new_tokens, context_size, temperature=1.
             logits = model(idx_cond)
 
         logits = logits[:, -1, :]  # Final token in the sequence
+        # print(f"Logits range: Min={logits.min().item():.2f}, Max={logits.max().item():.2f}, Mean={logits.mean().item():.2f}")
+        # logits = torch.clamp(logits, min=-10.0, max=10.0)
         logits = logits / temperature  # Apply temperature
-
+        
         probas = torch.softmax(logits, dim=-1)
         # Sample from the distribution rather than argmax for more natural randomness
         idx_next = torch.multinomial(probas, num_samples=1)
