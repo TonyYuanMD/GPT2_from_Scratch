@@ -60,6 +60,7 @@ import wandb
 
 # Import our GPT implementation
 import gpt
+from sklearn.model_selection import train_test_split
 
 # Set CuPy/CUDA to allow TF32 computations
 # This can provide a speedup on compatible GPUs (RTX 4000 series, etc.)
@@ -233,53 +234,103 @@ def create_dataloaders(docs, tokenizer, config, args):
     ###########################################################################
 
     # Your Code here
-    if args.data_format == "ärrow":
-        train_loader = gpt.create_dataloader(arrow_dataset_path=args.data_path, 
-                                             batch_size=args.batch_size,
-                                            #  max_length=config['context_length'],
-                                            #  stride=config['context_length'] // 2,
-                                             shuffle=True,
-                                             drop_last=True,
-                                             num_workers=args.num_workers)
-
-        val_path = args.eval_data_path if args.eval_data_path else args.data_path
-
-        valid_loader = gpt.create_dataloader(arrow_dataset_path=val_path, 
-                                             batch_size=args.eval_batch_size,
-                                            #  max_length=config['context_length'],
-                                            #  stride=config['context_length'] // 2,
-                                             shuffle=True,
-                                             drop_last=True,
-                                             num_workers=args.num_workers)
-
-    else:
-        total_docs = len(docs)
-        train_size = int(total_docs * 0.95)
-        # train_size = max(1, min(train_size, total_docs - 1))
+    if args.data_format == "arrow":
+        print(f"Using Arrow training dataset from {args.data_path}")
         
-        train_docs = docs[:train_size]
-        val_docs = docs[train_size:]
-        print(len(train_docs), len(val_docs))
+        # Arrow: Defer loading to gpt.create_dataloader
+        train_loader = gpt.create_dataloader(
+            arrow_dataset_path=args.data_path,
+            batch_size=args.batch_size,
+            max_length=config['context_length'],
+            shuffle=True, drop_last=True, num_workers=args.num_workers
+        )
+        train_docs = None # Keep docs variable clear for subsequent logic
+    
+    else: 
+        # JSONL/Raw Text: Docs list is already loaded into memory
+        print(f"Using JSONL training data from {args.data_path}")
+        train_docs = docs # Use the list loaded by load_data()
+
+    # --- 2. VALIDATION LOADER CREATION ---
+    
+    val_loader = None
+    
+    if args.eval_data_path:
+        # PATH A: Separate Evaluation File is Provided (Needs specific loading)
+        print(f"Validation data path detected: {args.eval_data_path}")
+
+        if args.eval_data_format == "arrow":
+            # 2A: Arrow Validation Data (Delegates to wrapper)
+            val_loader = gpt.create_dataloader(
+                arrow_dataset_path=args.eval_data_path,
+                batch_size=args.eval_batch_size or args.batch_size,
+                max_length=config['context_length'],
+                shuffle=False, drop_last=False, num_workers=args.num_workers,
+            )
+        else:
+            # 2B: JSONL Validation Data (Loads raw text)
+            print(f"Using JSONL validation dataset from {args.eval_data_path}")
+            val_docs = load_data(args.eval_data_path, args.eval_max_docs, args.eval_data_format)
+            
+            val_dataset = gpt.GPTDataset(
+                docs=val_docs,
+                tokenizer=tokenizer,
+                max_length=config['context_length'],
+                stride=config.get("stride", config["context_length"] // 2)
+            )
+            val_loader = DataLoader(
+                dataset=val_dataset,
+                batch_size=args.eval_batch_size or args.batch_size,
+                shuffle=False, drop_last=False, num_workers=args.num_workers
+            )
+        print(f"Training batches:   {len(train_loader)}")
+        print(f"Validation batches: {len(val_loader) if val_loader else 0}")
+        print("✅ Dataloaders created successfully.\n")
+
+        return train_loader, val_loader
+    
+    # 3. Path: Fallback Split (No separate eval path provided, train_docs is raw list)
+    elif train_docs is not None:
+        print("No separate validation path provided — splitting training data 95/5.")
         
-        train_loader = gpt.create_dataloader(txt=train_docs, 
-                                             batch_size=args.batch_size,
-                                             max_length=config['context_length'],
-                                             stride=config['context_length'] // 2,
-                                             shuffle=True,
-                                             drop_last=True,
-                                             num_workers=args.num_workers)
-        valid_loader = gpt.create_dataloader(txt=val_docs, 
-                                             batch_size=args.eval_batch_size,
-                                             max_length=config['context_length'],
-                                             stride=config['context_length'] // 2,
-                                             shuffle=True,
-                                             drop_last=True,
-                                             num_workers=args.num_workers)
+        # CRITICAL SAFEGUARD: Ensure test size is at least 1 document.
+        total_train_docs = len(train_docs)
+        min_test_size = 1
+        test_size = max(min_test_size, int(total_train_docs * 0.05)) 
+        
+        # Split documents using utility
+        train_docs_split, val_docs_split = train_test_split(train_docs, test_size=test_size, random_state=args.seed)
+        
+        # --- TRAIN LOADER (Recreate using the new smaller split) ---
+        train_dataset = gpt.GPTDataset(
+            docs=train_docs_split,
+            tokenizer=tokenizer,
+            max_length=config['context_length'],
+            stride=config.get("stride", config["context_length"] // 2)
+        )
+        train_loader = DataLoader(
+            dataset=train_dataset,
+            batch_size=args.batch_size,
+            shuffle=True, drop_last=True, num_workers=args.num_workers
+        )
+        
+        # --- VALIDATION LOADER (Direct Creation with corrected split) ---
+        val_dataset = gpt.GPTDataset(
+            docs=val_docs_split,
+            tokenizer=tokenizer,
+            max_length=config['context_length'],
+            stride=config.get("stride", config["context_length"] // 2)
+        )
+        val_loader = DataLoader(
+            dataset=val_dataset,
+            batch_size=args.eval_batch_size or args.batch_size,
+            shuffle=False, drop_last=False, num_workers=args.num_workers
+        )
 
     print("✅ Dataloaders created")
     print(f"📊 Training documents: {len(train_loader)}")
-    print(f"📊 Validation documents: {len(valid_loader)}")
-    return train_loader, valid_loader
+    print(f"📊 Validation documents: {len(val_loader)}")
+    return train_loader, val_loader
 
 # Add this function outside of train_model (where main is located)
 
@@ -517,6 +568,7 @@ def train_model(model, train_loader, val_loader, config, args):
 
             # print("STEP:", step)
             # Unpack dictionary (assuming the collator returns a dict)
+            # print("SHAPE OF INPUT:", input_ids.shape)
             input_ids = input_ids.to(device)
             labels = labels.to(device)
 

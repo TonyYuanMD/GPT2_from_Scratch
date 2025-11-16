@@ -69,19 +69,19 @@ def parse_args():
 
     # Data arguments
     parser.add_argument('--train_data_path', type=str,
-                       default='/shared/0/projects/teaching/eecs595/data/smol-smoltalk-train.jsonl.gz',
+                       default='./Data/sft_data_packed.arrow/',
                        help='Path to training data')
     parser.add_argument('--train_data_format', type=str, choices=['jsonl', 'arrow'], default='jsonl',
                        help='Format of training data: jsonl (for .jsonl/.gz files) or arrow (for arrow datasets)')
     parser.add_argument('--val_data_format', type=str, choices=['jsonl', 'arrow'], default='jsonl',
                        help='Format of validation data: jsonl (for .jsonl/.gz files) or arrow (for arrow datasets)')
     parser.add_argument('--model_path', type=str,
-                       default='/shared/0/projects/teaching/eecs595/models/pico-gpt/pretrained-models/gpt.1B-18000-step.model.pth',
+                       default='./models/sfted-models/',
                        help='Path to pre-trained model')
 
     # Validation arguments
     parser.add_argument('--val_data_path', type=str,
-                       default='/shared/0/projects/teaching/eecs595/data/smol-smoltalk-dev.jsonl.gz',
+                       default='./Data/smol-smoltalk-dev.jsonl.gz',
                        help='Path to validation data')
     parser.add_argument('--eval_max_docs', type=int, default=None,
                        help='Maximum number of documents to load for validation (only for raw text)')
@@ -131,7 +131,7 @@ def parse_args():
 
     # Logging and saving
     parser.add_argument('--output_dir', type=str,
-                       default='/shared/0/projects/teaching/eecs595/models/pico-gpt/sft-models/',
+                       default='./models/sft-models/',
                        help='Output directory for models')
     parser.add_argument('--save_every', type=int, default=1000,
                        help='Save model every N steps')
@@ -243,8 +243,80 @@ def create_dataloaders(args, tokenizer):
     # This function sets up the data pipeline for SFT training.               #
     ###########################################################################
 
-    pass
+    train_loader = sft.create_sft_dataloader(data_file=args.train_data_path,
+                                             tokenizer=tokenizer,
+                                             batch_size=args.batch_size,
+                                             max_length=args.context_length,
+                                             shuffle=True,
+                                             drop_last=True,
+                                             num_workers=args.num_workers,
+                                             use_packed=(args.train_data_format == 'arrow')
+                                             )
 
+    val_loader = sft.create_sft_dataloader(data_file=args.val_data_path,
+                                           tokenizer=tokenizer,
+                                           batch_size=args.batch_size,
+                                           max_length=args.context_length,
+                                           shuffle=True,
+                                           drop_last=True,
+                                           num_workers=args.num_workers,
+                                           use_packed=(args.val_data_format == 'arrow')
+                                           )
+    
+    print(f"✅ Training batches: {len(train_loader)}, Validation batches: {len(val_loader)}")
+    return train_loader, val_loader
+
+
+def get_amp_dtype(device):
+    '''Get the appropriate AMP dtype for mixed precision training on the device.'''
+
+    # Check for CUDA (GPU) support
+    if device.startswith('cuda'):
+        # bfloat16 is preferred for stability on modern GPUs (e.g., A100, H100)
+        amp_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        
+    # Check for Apple Silicon (MPS) support
+    elif device == 'mps':
+        # MPS typically supports float16 (half precision)
+        amp_dtype = torch.float16
+        
+    else:
+        # Default to standard float32 on CPU, as low precision is not efficient/supported
+        amp_dtype = torch.float32 
+        
+    return amp_dtype
+
+def save_model(model, optimizer, scheduler, args, global_step, epoch, is_epoch_end=False):
+    """
+    Saves the complete training checkpoint to enable resumption.
+    """
+    
+    # Define filename based on the step or epoch end flag
+    if is_epoch_end:
+        filename = f"checkpoint-epoch-{epoch}.pth"
+    else:
+        filename = f"checkpoint-step-{global_step}.pth"
+
+    # Define the save path
+    save_dir = os.path.join(args.output_dir, args.wandb_project, args.wandb_run_name)
+    os.makedirs(save_dir, exist_ok=True)
+    save_path = os.path.join(save_dir, filename)
+
+    print(f"Saving checkpoint to {save_path}...")
+    
+    # 1. Assemble the state dictionary
+    checkpoint = {
+        'model_state': model.state_dict(),
+        'optimizer_state': optimizer.state_dict(),
+        'scheduler_state': scheduler.state_dict(),
+        'global_step': global_step,
+        'epoch': epoch,
+        # Save any other essential metadata
+    }
+
+    # 2. Save the checkpoint file
+    torch.save(checkpoint, save_path)
+    print(f"✅ Checkpoint saved at step {global_step}")
 
 def train_model(model, train_loader, val_loader, args, device):
     """Train the model with SFT."""
@@ -290,7 +362,17 @@ def train_model(model, train_loader, val_loader, args, device):
     os.makedirs(args.output_dir, exist_ok=True)
 
     model.train()
+    try:
+        # Note: This attempt to create a CUDA scaler will fail if CUDA is not available
+        scaler = GradScaler(device="cuda" if device.startswith("cuda") else "cpu") 
+    except TypeError:
+        scaler = GradScaler()
+    
+    running_loss = 0.0
+
     last_save_step = -1
+    use_amp = (device.startswith("cuda") or device == "mps")
+    amp_dtype = get_amp_dtype(device)
 
     for epoch in trange(args.max_epochs, desc="Epoch"):
         epoch_losses = []
@@ -321,6 +403,22 @@ def train_model(model, train_loader, val_loader, args, device):
             ###########################################################################
 
             # code goes here
+            input_ids = batch['input_ids'].to(device)
+            labels = batch['labels'].to(device)
+
+            # 2. Forward Pass and Loss Calculation (TODO 4.2)
+            with autocast(device_type=device, enabled=use_amp, dtype=amp_dtype):
+                
+                # 3. Model call and Reshaping
+                logits = model(input_ids)
+                B, T, V = logits.shape
+                
+                # Loss calculation: CrossEntropyLoss expects (N, V) and (N)
+                logits_flat = logits.view(B * T, V)
+                labels_flat = labels.view(B * T)
+                
+                # Compute loss and scale by accumulation factor
+                loss = loss_fn(logits_flat, labels_flat) / args.gradient_accumulation_steps
 
 
             ###########################################################################
@@ -347,10 +445,75 @@ def train_model(model, train_loader, val_loader, args, device):
             # - Step 4: Apply gradients and update parameters                         #
             ###########################################################################
 
-            # code goes here
+            ###########################################################################
+            # (TODO 4.2: Forward Pass & Loss is assumed to be defined above this block) #
+            ###########################################################################
+            
+            # --- Backward Pass ---
+            # Use appropriate backward pass based on device/AMP
+            if use_amp:
+                scaler.scale(loss).backward()
+            else:
+                loss.backward()
+            
+            # 1. Track loss for logging (unscaled by accum factor)
+            running_loss += loss.item() * args.gradient_accumulation_steps
+
+            ###########################################################################
+            #                            TODO 4.3: Optimization Block                 #
+            ###########################################################################
+
+            # 2. Conditional Optimization Step (Macro-Batch Update)
+            if (batch_idx + 1) % args.gradient_accumulation_steps == 0:
+                
+                # a. Gradient Clipping and Unscaling
+                if use_amp:
+                    scaler.unscale_(optimizer) 
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    scaler.step(optimizer) # Scaler updates parameters
+                    scaler.update()        # Updates scaling factor
+                else:
+                    # CPU/Standard Path: Clip and Step
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                    optimizer.step()
+                
+                # b. Clear Gradients and Update LR
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True) # Use set_to_none=True for efficiency
+                
+                # c. Track Steps
+                opt_step += 1
+                global_step += 1
+                
+                # 3. Periodic Logging
+                if opt_step % args.eval_every == 0:
+                    
+                    # Log Training Loss
+                    wandb.log({
+                        "train/loss": running_loss / args.eval_every,
+                        "train/lr": optimizer.param_groups[0]['lr'],
+                    }, step=global_step)
+                    
+                    # Reset loss accumulator
+                    running_loss = 0.0 
+                    
+                    # 4. Step Evaluation
+                    if val_loader is not None:
+                        val_loss = sft.evaluate_validation_loss(
+                            model, val_loader, loss_fn, device
+                        )
+                        wandb.log({"val/loss": val_loss}, step=global_step)
+
+                # 5. Checkpointing
+                if opt_step % args.save_every == 0:
+                    # Assume save_model utility is available
+                    save_model(model, optimizer, scheduler, args, global_step, epoch)
 
         # code goes here
-
+        if val_loader is not None:
+            full_val_loss = sft.evaluate_validation_loss(model, val_loader, loss_fn, device)
+            wandb.log({"epoch/val_loss": full_val_loss, "epoch/global_step": global_step})
+        save_model(model, optimizer, scheduler, args, global_step, epoch, is_epoch_end=True)
     # code goes here
 
     wandb.finish()
@@ -388,7 +551,25 @@ def main():
     # This ensures your pre-trained model is properly loaded!                 #
     ###########################################################################
 
-    pass
+    model = sft.load_pretrained_model(args.model_path, config)
+    model.to(device)
+
+    # 4. Optionally compile model for performance
+    if hasattr(torch, 'compile'):
+        print("Compiling model for performance...")
+        try:
+            # Note: We assign the compiled function back to the model variable
+            model = torch.compile(model, mode="default")
+            print("✅ Model compiled successfully!")
+        except Exception as e:
+            # We skip compilation if the environment (like Windows/CPU) doesn't support it
+            print(f"Warning: Model compilation failed, using eager mode. Error: {e}")
+
+    train_loader, val_loader = create_dataloaders(args, tokenizer)
+
+    # 5. Start Training
+    # train_model is called with the setup model and device
+    train_model(model, train_loader=train_loader, val_loader=val_loader, args=args, device=device)
 
 
 if __name__ == "__main__":
