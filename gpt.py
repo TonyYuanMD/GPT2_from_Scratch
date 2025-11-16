@@ -225,9 +225,9 @@ class MultiHeadAttention(nn.Module):
         keys = self.W_key(embeds)
         values = self.W_value(embeds)
 
-        queries = queries.view(b, self.num_heads, num_tokens, self.head_dim)
-        keys = keys.view(b, self.num_heads, num_tokens, self.head_dim)
-        values = values.view(b, self.num_heads, num_tokens, self.head_dim)
+        queries = queries.view(b,num_tokens,self.num_heads,self.head_dim).transpose(1,2)
+        keys = keys.view(b,num_tokens,self.num_heads,self.head_dim).transpose(1,2)
+        values = values.view(b,num_tokens,self.num_heads,self.head_dim).transpose(1,2)
 
         # Apply RoPE to queries and keys like this:
         rope_cos, rope_sin = self.rope(queries)
@@ -801,7 +801,7 @@ def setup_tokenizer():
     # Your code here
 
     tokenizer = AutoTokenizer.from_pretrained(pretrained_model_name_or_path="gpt2",
-                                              pad_token="<|pad|>", )
+                                              pad_token="<|pad|>")
     tokenizer.add_special_tokens(special_tokens_dict)
 
     return tokenizer

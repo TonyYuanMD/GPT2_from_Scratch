@@ -121,7 +121,7 @@ def parse_args():
 
     # Logging and saving
     parser.add_argument('--output_dir', type=str,
-                       default='/shared/0/projects/teaching/eecs595/models/pico-gpt/pretrained-models/',
+                       default='./models/pico-gpt/pretrained-models/',
                        help='Output directory for saving models')
     parser.add_argument('--save_every', type=int, default=1000,
                        help='Save model every N steps')
@@ -255,9 +255,11 @@ def create_dataloaders(docs, tokenizer, config, args):
     else:
         total_docs = len(docs)
         train_size = int(total_docs * 0.95)
-
+        # train_size = max(1, min(train_size, total_docs - 1))
+        
         train_docs = docs[:train_size]
         val_docs = docs[train_size:]
+        print(len(train_docs), len(val_docs))
         
         train_loader = gpt.create_dataloader(txt=train_docs, 
                                              batch_size=args.batch_size,
@@ -518,18 +520,24 @@ def train_model(model, train_loader, val_loader, config, args):
 
             # 1. Forward Pass and Loss with Mixed Precision
             # The 'autocast' context ensures the forward pass uses the lower precision (amp_dtype).
-            with autocast(device_type=device, dtype=amp_dtype):
+            if device == "cuda":
+                with autocast(device_type=device, dtype=amp_dtype):
+                    logits = model(input_ids)
+                    logits_flat = logits.view(-1, logits.shape[-1])
+                    labels_flat = labels.view(-1)
+                    
+                    # Scale loss by 'accum' factor for accumulation
+                    loss_val = loss_fn(logits_flat, labels_flat) / accum
+                
+                # 2. Backward Pass (Scaled by GradScaler)
+                # Use scaler.scale() for backward pass
+                scaler.scale(loss_val).backward()
+            else:
                 logits = model(input_ids)
                 logits_flat = logits.view(-1, logits.shape[-1])
                 labels_flat = labels.view(-1)
-                
-                # Scale loss by 'accum' factor for accumulation
                 loss_val = loss_fn(logits_flat, labels_flat) / accum
-            
-            # 2. Backward Pass (Scaled by GradScaler)
-            # Use scaler.scale() for backward pass
-            scaler.scale(loss_val).backward()
-            
+                loss_val.backward()
             # Track loss for logging (unscaled by 'accum')
             current_step_loss += loss_val.item() * accum 
             
@@ -624,6 +632,7 @@ def main():
 
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(docs, tokenizer, config, args)
+    print(len(train_loader), len(val_loader))
 
     ###########################################################################
     #                            TODO 2.4: YOUR CODE HERE                     #
@@ -642,6 +651,7 @@ def main():
 
     # your code here
     device = get_device(args.device) # Returns string 'cpu'
+    print(device)
     model = gpt.GPTModel(config).to(device)
     # torch.compile(model, mode="default")
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
