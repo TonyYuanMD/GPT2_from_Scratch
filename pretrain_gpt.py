@@ -107,7 +107,7 @@ def parse_args():
                        help='Target number of tokens to train on')
 
     # Validation arguments
-    parser.add_argument('--eval_data_path', type=str, default=None,
+    parser.add_argument('--eval_data_path', type=str, default='./Data/fineweb-edu-eval-100K.jsonl.gz',
                        help='Path to validation data')
     parser.add_argument('--eval_data_format', type=str, choices=['jsonl', 'arrow'], default='jsonl',
                        help='Format of validation data: jsonl (for .jsonl/.gz files) or arrow (for arrow datasets)')
@@ -121,7 +121,7 @@ def parse_args():
 
     # Logging and saving
     parser.add_argument('--output_dir', type=str,
-                       default='./models/pico-gpt/pretrained-models/',
+                       default='./models/pretrained-models/',
                        help='Output directory for saving models')
     parser.add_argument('--save_every', type=int, default=1000,
                        help='Save model every N steps')
@@ -133,7 +133,7 @@ def parse_args():
                        default=f"gpt-pretraining-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}",
                        help='Wandb run name')
     # System arguments
-    parser.add_argument('--device', type=str, default='cpu',
+    parser.add_argument('--device', type=str, default='auto',
                        help='Device to use (auto, cpu, cuda, mps)')
     parser.add_argument('--num_workers', type=int, default=8,
                        help='Number of data loading workers')
@@ -341,10 +341,11 @@ def evaluate_validation_loss(model, val_loader, loss_fn, device, max_docs=None):
     num_batch = 0
 
     with torch.no_grad():
-        for batch in val_loader:
-            
-            input_ids = batch['input_ids'].to(device)
-            labels = batch['labels'].to(device)
+        for input_ids, labels in val_loader:
+        
+            # Now input_ids and labels are the TENSORS themselves, ready to move:
+            input_ids = input_ids.to(device)
+            labels = labels.to(device)
 
             logits = model(input_ids)
             logits_flat = logits.view(-1, logits.shape[-1])
@@ -356,7 +357,7 @@ def evaluate_validation_loss(model, val_loader, loss_fn, device, max_docs=None):
             if max_docs is not None and num_batch >= max_docs:
                 break
 
-    loss_avg = total_loss / num_batch
+    loss_avg = total_loss / max(num_batch, 1)
     model.train()
 
     return loss_avg
@@ -455,7 +456,7 @@ def train_model(model, train_loader, val_loader, config, args):
     # - Benefits: Better gradient estimates, memory efficiency, stable training
 
     # Gradient accumulation variables
-    target_global_batch = 256
+    target_global_batch = 10
     micro_batch = args.batch_size
     accum = max(1, target_global_batch // micro_batch)
 
@@ -514,6 +515,7 @@ def train_model(model, train_loader, val_loader, config, args):
             # for more information on mixed precision training if you're curious!
             # We strongly recommend using mixed precision training for faster training and reduced memory usage.
 
+            # print("STEP:", step)
             # Unpack dictionary (assuming the collator returns a dict)
             input_ids = input_ids.to(device)
             labels = labels.to(device)
@@ -521,6 +523,7 @@ def train_model(model, train_loader, val_loader, config, args):
             # 1. Forward Pass and Loss with Mixed Precision
             # The 'autocast' context ensures the forward pass uses the lower precision (amp_dtype).
             if device == "cuda":
+                # print("WE ARE USING CUDA!!!")
                 with autocast(device_type=device, dtype=amp_dtype):
                     logits = model(input_ids)
                     logits_flat = logits.view(-1, logits.shape[-1])
@@ -533,14 +536,16 @@ def train_model(model, train_loader, val_loader, config, args):
                 # Use scaler.scale() for backward pass
                 scaler.scale(loss_val).backward()
             else:
+                # print("WE ARE NOT USING CUDA!!!")
                 logits = model(input_ids)
+                # print("LOGITS", logits)
                 logits_flat = logits.view(-1, logits.shape[-1])
                 labels_flat = labels.view(-1)
                 loss_val = loss_fn(logits_flat, labels_flat) / accum
+                # print("LOSS_VAL_TYPE", type(loss_val))
                 loss_val.backward()
             # Track loss for logging (unscaled by 'accum')
             current_step_loss += loss_val.item() * accum 
-            
             # 3. Conditional Optimization Step (Macro-Batch Update)
             if (step + 1) % accum == 0:
                 
@@ -632,8 +637,30 @@ def main():
 
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(docs, tokenizer, config, args)
-    print(len(train_loader), len(val_loader))
-
+    # print(len(train_loader), len(val_loader))
+    print("\n" + "="*80)
+    print("📘 EECS595 GPT Pretraining Configuration Summary")
+    print("="*80)
+    print(f"🗂 Data path:        {args.data_path}")
+    print(f"📁 Output directory: {args.output_dir}")
+    print("-"*80)
+    print(f"🧠 Model structure:")
+    print(f"   vocab_size={config['vocab_size']}, context_length={config['context_length']}")
+    print(f"   emb_dim={config['emb_dim']}, n_heads={config['n_heads']}, n_layers={config['n_layers']}")
+    print(f"   dropout={config['drop_rate']}")
+    print("-"*80)
+    print(f"⚙️ Training settings:")
+    print(f"   batch_size={args.batch_size}, learning_rate={args.learning_rate}")
+    print(f"   weight_decay={args.weight_decay}, max_epochs={args.max_epochs}")
+    print(f"   save_every={args.save_every}, eval_every={args.eval_every}")
+    print("-"*80)
+    print(f"💻 Device:           {get_device(args.device)}")
+    print(f"🌱 Random seed:      {args.seed}")
+    print(f"🧵 Num workers:      {args.num_workers}")
+    print("-"*80)
+    print(f"📊 WandB Project:    {args.wandb_project}")
+    print(f"📈 Run Name:         {args.wandb_run_name}")
+    print("="*80 + "\n")
     ###########################################################################
     #                            TODO 2.4: YOUR CODE HERE                     #
     #                                                                         #
@@ -653,7 +680,7 @@ def main():
     device = get_device(args.device) # Returns string 'cpu'
     print(device)
     model = gpt.GPTModel(config).to(device)
-    # torch.compile(model, mode="default")
+    # model = torch.compile(model, mode="default")
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"📊 Total Trainable Parameters: {total_params:,}")
     
