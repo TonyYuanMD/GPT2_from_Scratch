@@ -456,7 +456,7 @@ def train_model(model, train_loader, val_loader, config, args):
     # - Benefits: Better gradient estimates, memory efficiency, stable training
 
     # Gradient accumulation variables
-    target_global_batch = 10
+    target_global_batch = 256
     micro_batch = args.batch_size
     accum = max(1, target_global_batch // micro_batch)
 
@@ -680,9 +680,9 @@ def main():
     device = get_device(args.device) # Returns string 'cpu'
     print(device)
     model = gpt.GPTModel(config).to(device)
-    # model = torch.compile(model, mode="default")
     total_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"📊 Total Trainable Parameters: {total_params:,}")
+    model = torch.compile(model, mode="default")
     
     train_model(model, train_loader=train_loader, val_loader=val_loader, config=config, args=args)
 
