@@ -154,7 +154,8 @@ class SFTDataset(Dataset):
             labels.extend(label)
             
             if len(ids) >= self.max_length:
-                break
+                ids = ids[:self.max_length]
+                labels = labels[:self.max_length]
         ids = torch.tensor(ids, dtype=torch.long)
         labels = torch.tensor(labels, dtype=torch.long)
 
@@ -374,7 +375,31 @@ def load_pretrained_model(model_path: str, config: Dict[str, Any]):
     """
     print(f"Loading pre-trained model from {model_path}...")
     state_dict = torch.load(model_path, map_location='cpu')
+    if 'model_state_dict' in state_dict:
+        # If it's a standard checkpoint, use the nested dictionary
+        state_dict = state_dict['model_state_dict']
+    elif 'model_state' in state_dict:
+        # Handle cases where the model state is named slightly differently
+        state_dict = state_dict['model_state']
+    cleaned = {}
+    for k, v in state_dict.items():
+        new_k = k
 
+        if new_k.startswith("_orig_mod."):
+            new_k = new_k[len("_orig_mod."):]
+
+        if new_k.startswith("_wrapped_module."):
+            new_k = new_k[len("_wrapped_module."):]
+
+        if new_k.startswith("_compile_cache."):
+          
+            parts = new_k.split(".")
+            if len(parts) > 2:
+                new_k = ".".join(parts[2:])
+
+        cleaned[new_k] = v
+
+    state_dict = cleaned
     # Create model with correct configuration
     model = GPTModel(config)
 

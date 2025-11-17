@@ -47,6 +47,7 @@ from transformers import AutoTokenizer, get_cosine_schedule_with_warmup, default
 # Data handling
 from datasets import load_from_disk
 import orjson
+import datetime
 
 # Progress tracking
 from tqdm.auto import tqdm, trange
@@ -135,10 +136,12 @@ def parse_args():
                        help='Output directory for models')
     parser.add_argument('--save_every', type=int, default=1000,
                        help='Save model every N steps')
-    parser.add_argument('--eval_every', type=int, default=1000,
-                       help='Evaluate model every N steps')
     parser.add_argument('--wandb_project', type=str, default='gpt-sft',
                        help='Wandb project name')
+    parser.add_argument('--wandb_run_name', type=str,
+    # Provide a unique, dynamic default value
+    default=f"sft-run-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}",
+    help='Wandb run name')
 
     # Data arguments
     parser.add_argument('--max_train_docs', type=int, default=None,
@@ -195,7 +198,27 @@ def load_model(model_path, config):
     """Load pre-trained model."""
     print(f"Loading pre-trained model from {model_path}...")
     state_dict = torch.load(model_path, map_location='cpu')
+    if 'model_state_dict' in state_dict:
+        state_dict = state_dict['model_state_dict']
+    cleaned = {}
+    for k, v in state_dict.items():
+        new_k = k
 
+        if new_k.startswith("_orig_mod."):
+            new_k = new_k[len("_orig_mod."):]
+
+        if new_k.startswith("_wrapped_module."):
+            new_k = new_k[len("_wrapped_module."):]
+
+        if new_k.startswith("_compile_cache."):
+          
+            parts = new_k.split(".")
+            if len(parts) > 2:
+                new_k = ".".join(parts[2:])
+
+        cleaned[new_k] = v
+
+    state_dict = cleaned
     # Create model with correct configuration
     model = gpt.GPTModel(config)
 
@@ -405,6 +428,8 @@ def train_model(model, train_loader, val_loader, args, device):
             # code goes here
             input_ids = batch['input_ids'].to(device)
             labels = batch['labels'].to(device)
+            # input_ids = input_ids[:, :args.context_length]
+            # labels = labels[:, :args.context_length]
 
             # 2. Forward Pass and Loss Calculation (TODO 4.2)
             with autocast(device_type=device, enabled=use_amp, dtype=amp_dtype):
@@ -551,7 +576,7 @@ def main():
     # This ensures your pre-trained model is properly loaded!                 #
     ###########################################################################
 
-    model = sft.load_pretrained_model(args.model_path, config)
+    model = load_model(args.model_path, config)
     model.to(device)
 
     # 4. Optionally compile model for performance
