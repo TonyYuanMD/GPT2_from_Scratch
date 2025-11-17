@@ -153,6 +153,8 @@ class SFTDataset(Dataset):
             ids.extend(id_token)
             labels.extend(label)
             
+            # pad to the max_length
+            
             if len(ids) >= self.max_length:
                 ids = ids[:self.max_length]
                 labels = labels[:self.max_length]
@@ -201,7 +203,7 @@ def sft_data_collator(batch):
     input_ids = nn.utils.rnn.pad_sequence(
         input_ids_list, 
         batch_first=True, 
-        padding_value=0 # Assuming PAD_TOKEN_ID is 0
+        padding_value=0
     )
 
     labels = nn.utils.rnn.pad_sequence(
@@ -281,7 +283,7 @@ def generate_chat_response(model, tokenizer, user_message, max_new_tokens=100, t
     ##############################################################################
     device = "cuda" if torch.cuda.is_available() else "cpu"
     input_concat = f"<|user|>{user_message}<|end|><|assistant|>"
-    input_token = torch.tensor(tokenizer.encode(input_concat)).unsqueeze(0) 
+    input_token = torch.tensor(tokenizer.encode(input_concat)).unsqueeze(0)
     input_token = input_token.to(device)
     
     end_id = tokenizer.convert_tokens_to_ids("<|end|>")
@@ -296,9 +298,9 @@ def generate_chat_response(model, tokenizer, user_message, max_new_tokens=100, t
         with torch.no_grad():
             logits = model(input_token)
         
-        logits = logits[:, -1, :] / temperature
+        logits =  logits[:, -1, :] / temperature
         
-        probs = torch.softmax(logits, dim=1)
+        probs = torch.softmax(logits, dim=-1)
         next_token = torch.multinomial(probs, 1)
         if next_token.item() == end_id:
             break
@@ -313,9 +315,9 @@ def generate_chat_response(model, tokenizer, user_message, max_new_tokens=100, t
     
     end_idx = output.rfind("<|end|>")
     if end_idx != -1:
-        return output[start_idx + 15:end_idx].strip()
+        return output[start_idx + 13:end_idx].strip()
     else:
-        return output[start_idx + 15:].strip()
+        return output[start_idx + 13:].strip()
 
 def generate_multi_turn_response(model, tokenizer, conversation_history, max_new_tokens=100, temperature=0.7):
     """

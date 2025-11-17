@@ -280,8 +280,8 @@ def create_dataloaders(args, tokenizer):
                                            tokenizer=tokenizer,
                                            batch_size=args.batch_size,
                                            max_length=args.context_length,
-                                           shuffle=True,
-                                           drop_last=True,
+                                           shuffle=False,
+                                           drop_last=False,
                                            num_workers=args.num_workers,
                                            use_packed=(args.val_data_format == 'arrow')
                                            )
@@ -428,8 +428,6 @@ def train_model(model, train_loader, val_loader, args, device):
             # code goes here
             input_ids = batch['input_ids'].to(device)
             labels = batch['labels'].to(device)
-            # input_ids = input_ids[:, :args.context_length]
-            # labels = labels[:, :args.context_length]
 
             # 2. Forward Pass and Loss Calculation (TODO 4.2)
             with autocast(device_type=device, enabled=use_amp, dtype=amp_dtype):
