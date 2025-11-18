@@ -1,13 +1,14 @@
 #!/bin/bash
 
 #SBATCH --job-name=pretrain
-#SBATCH --account=eecs595f25_class
+#SBATCH --account=ling702w25_class
 #SBATCH --partition=spgpu
-#SBATCH --gpus=1
-#SBATCH --time=00:05:00
+#SBATCH --gpus=2
+#SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=16g
+#SBATCH --mail-type=BEGIN,END
 #SBATCH --output=logs/slurm-%j.out
 #SBATCH --error=logs/slurm-%j.err
 
@@ -39,7 +40,7 @@ export TOKENIZERS_PARALLELISM=false
 python pretrain_gpt.py \
     --batch_size 16 \
     --learning_rate 6e-4 \
-    --max_epochs 15 \
+    --max_epochs 2 \
     --emb_dim 512 \
     --n_layers 12 \
     --n_heads 8 \
@@ -49,10 +50,11 @@ python pretrain_gpt.py \
     --device cuda \
     --data_path $DATA_PATH/fineweb-edu-sample-1B-hf/ \
     --data_format arrow \
-    --output_dir $MODEL_PATH \
+    --output_dir $OUTPUT_DIR \
     --wandb_project $WANDB_PROJECT \
     --wandb_run_name "gpt-pretraining-$(date +%Y%m%d-%H%M%S)" \
-    --eval_data_path $DATA_PATH/Data/fineweb-edu-eval-3M.jsonl.gz
+    --eval_data_path $DATA_PATH/fineweb-edu-eval-3M.jsonl.gz \
+    --eval_data_format jsonl
 
 echo "Training completed!"
 echo "Check the output directory for saved models and logs."
