@@ -4,7 +4,7 @@
 #SBATCH --account=ling702w25_class
 #SBATCH --partition=spgpu
 #SBATCH --gpus=1
-#SBATCH --time=00:05:00
+#SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=16g
@@ -58,7 +58,6 @@ python 'sft_gpt(1).py' \
     --train_data_format arrow \
     --wandb_project $WANDB_PROJECT \
     --wandb_run_name "gpt-sft-$(date +%Y%m%d-%H%M%S)" \
-    --val_data_format jsonl \
-    --compile True
+    --val_data_format jsonl
 
 echo "SFT training on full dataset finished."

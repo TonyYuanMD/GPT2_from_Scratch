@@ -103,11 +103,8 @@ def parse_args():
     parser.add_argument('--drop_rate', type=float, default=0.1,
                        help='Dropout rate')
 
-    parser.add_argument(
-    "--compile",
-    action="store_true",
-    help="Enable torch.compile() for faster training"
-)
+    parser.add_argument("--compile", action="store_true",
+                        help="Enable torch.compile() for faster training")
 
     # Training arguments
     parser.add_argument('--batch_size', type=int, default=16,
@@ -202,7 +199,9 @@ def load_model(model_path, config):
     """Load pre-trained model."""
     print(f"Loading pre-trained model from {model_path}...")
     state_dict = torch.load(model_path, map_location='cpu')
-
+    if 'model_state_dict' in state_dict:
+        state_dict = state_dict['model_state_dict']
+        
     cleaned = {}
     for k, v in state_dict.items():
         new_k = k
