@@ -6,7 +6,7 @@
 echo "🚀 Starting GPT Model Evaluation..."
 
 python score_gpt.py \
-    --model_path "models/sft-models/sft-gpt-7000-step.pth" \
+    --model_path "/scratch/eecs595f25_class_root/eecs595f25_class/yhongda/models/sft-models/model_step_4000.pt" \
     --questions_file "test_questions.jsonl" \
     --output_file "evaluation_results_$(date +'%Y%m%d_%H%M%S').csv" \
     --vocab_size 50262 \
