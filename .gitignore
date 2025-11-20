@@ -4,3 +4,5 @@ wandb
 __pycache__
 .ipynb_checkpoints
 logs
+models
+test_log.txt
