@@ -77,12 +77,12 @@ def parse_args():
     parser.add_argument('--val_data_format', type=str, choices=['jsonl', 'arrow'], default='jsonl',
                        help='Format of validation data: jsonl (for .jsonl/.gz files) or arrow (for arrow datasets)')
     parser.add_argument('--model_path', type=str,
-                       default='/shared/0/projects/teaching/eecs595/models/pico-gpt/pretrained-models/gpt.1B-18000-step.model.pth',
+                       default='/scratch/eecs595f25_class_root/eecs595f25_class/yhongda/models/pretrained-models/',
                        help='Path to pre-trained model')
 
     # Validation arguments
     parser.add_argument('--val_data_path', type=str,
-                       default='/shared/0/projects/teaching/eecs595/data/smol-smoltalk-dev.jsonl.gz',
+                       default='./Data/smol-smoltalk-dev.jsonl.gz',
                        help='Path to validation data')
     parser.add_argument('--eval_max_docs', type=int, default=None,
                        help='Maximum number of documents to load for validation (only for raw text)')
@@ -134,7 +134,7 @@ def parse_args():
 
     # Logging and saving
     parser.add_argument('--output_dir', type=str,
-                       default='/shared/0/projects/teaching/eecs595/models/pico-gpt/sft-models/',
+                       default='/scratch/eecs595f25_class_root/eecs595f25_class/yhongda/models/sft-models/',
                        help='Output directory for models')
     parser.add_argument('--save_every', type=int, default=1000,
                        help='Save model every N steps')
@@ -142,7 +142,11 @@ def parse_args():
                        help='Evaluate model every N steps')
     parser.add_argument('--wandb_project', type=str, default='gpt-sft',
                        help='Wandb project name')
-
+    parser.add_argument('--wandb_run_name', type=str,
+    # Provide a unique, dynamic default value
+    default=f"sft-run-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}",
+    help='Wandb run name')
+        
     # Data arguments
     parser.add_argument('--max_train_docs', type=int, default=None,
                        help='Maximum number of documents to load (for testing)')

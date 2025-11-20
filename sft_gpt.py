@@ -77,7 +77,7 @@ def parse_args():
     parser.add_argument('--val_data_format', type=str, choices=['jsonl', 'arrow'], default='jsonl',
                        help='Format of validation data: jsonl (for .jsonl/.gz files) or arrow (for arrow datasets)')
     parser.add_argument('--model_path', type=str,
-                       default='./models/sfted-models/',
+                       default='/scratch/eecs595f25_class_root/eecs595f25_class/yhongda/models/pretrained-models/',
                        help='Path to pre-trained model')
 
     # Validation arguments
@@ -132,7 +132,7 @@ def parse_args():
 
     # Logging and saving
     parser.add_argument('--output_dir', type=str,
-                       default='./models/sft-models/',
+                       default='/scratch/eecs595f25_class_root/eecs595f25_class/yhongda/models/sft-models/',
                        help='Output directory for models')
     parser.add_argument('--save_every', type=int, default=1000,
                        help='Save model every N steps')
