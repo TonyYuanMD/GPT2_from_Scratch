@@ -514,6 +514,7 @@ def create_sft_dataloader(data_file: str, tokenizer, batch_size: int = 16,
     #    - Create DataLoader with hf_collate function                         #
     # 3. If use_packed=False:                                                 #
     #    - Create SFTDataset instance with data_file, tokenizer, max_length   #
+    #    - Create SFTDataset instance with data_file, tokenizer, max_length   #
     #    - Create DataLoader with sft_data_collator function                  #
     # 4. Print success message and return DataLoader                          #
     #                                                                         #
