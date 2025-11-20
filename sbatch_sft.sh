@@ -4,7 +4,7 @@
 #SBATCH --account=ling702w25_class
 #SBATCH --partition=spgpu
 #SBATCH --gpus=1
-#SBATCH --time=04:00:00
+#SBATCH --time=00:05:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --mem-per-cpu=16g
@@ -29,11 +29,11 @@ echo "=================================="
 export CUDA_VISIBLE_DEVICES=0
 export WANDB_PROJECT="eecs595-gpt-sft"
 export DATA_PATH="Data/"
-export MODEL_PATH="models/pretrained-models/"
+export MODEL_PATH="/scratch/eecs595f25_class_root/eecs595f25_class/yhongda/models/pretrained-models"
 export TOKENIZERS_PARALLELISM=false
 
 # Use these hyperparameters for your full SFT training
-python sft_gpt.py \
+python 'sft_gpt(1).py' \
     --train_data_path $DATA_PATH/sft_data_packed.arrow \
     --val_data_path $DATA_PATH/smol-smoltalk-dev.jsonl.gz \
     --model_path $MODEL_PATH/gpt-pretraining-20251117-233818/model_step_3000.pth \
@@ -48,7 +48,7 @@ python sft_gpt.py \
     --max_epochs 3 \
     --gradient_accumulation_steps 4 \
     --warmup_steps 100 \
-    --output_dir "models/sft-models/" \
+    --output_dir "/scratch/eecs595f25_class_root/eecs595f25_class/yhongda/models/sft-models/" \
     --save_every 1000 \
     --eval_every 500 \
     --wandb_project "gpt-sft-full" \
@@ -58,6 +58,7 @@ python sft_gpt.py \
     --train_data_format arrow \
     --wandb_project $WANDB_PROJECT \
     --wandb_run_name "gpt-sft-$(date +%Y%m%d-%H%M%S)" \
-    --val_data_format jsonl
+    --val_data_format jsonl \
+    --compile True
 
 echo "SFT training on full dataset finished."
